@@ -23,7 +23,7 @@
 {\small\textbf{Filippo Vitozzi}, \textbf{Ginevra Gurioli} \& \textbf{Javier Colmenero}}
 
 \vspace{0.15cm}
-\noindent\fbox{\parbox{0.97\textwidth}{\small\textbf{The core problem.} Anyone who uses V\'elib' in Paris knows the frustration of reaching a station that is empty when you need a bike, or full when you need to return one. We forecast whether a station will become \textit{critical} (nearly empty or nearly full) within the next \textbf{15 minutes}, and test whether knowing what surrounds the station (universities, business districts, tourist landmarks) makes that forecast noticeably more accurate.}}
+\noindent\fbox{\parbox{0.97\textwidth}{\small\textbf{Research Context.} Station starvation and saturation severely degrade the reliability of station-based bike-sharing systems. We model real-time station \textit{criticality} over a \textbf{5-minute} lead time throughout the Vélib' network, assessing whether augmenting short-term temporal and weather indicators with granular urban point-of-interest (POI) spatial metrics measurably enhances predictive performance.}}
 
 \section{1. Research Questions}
 
@@ -39,14 +39,6 @@ We break the project into three core research questions that build sequentially 
 The V\'elib' system updates dynamically and offers no historical dock status archive, necessitating a continuous ingestion pipeline. A scheduled cron job running on \textbf{Railway} queries the official V\'elib' GBFS status API every 15 minutes across a 30-day continuous collection window. Snapshots are partitioned and serialized directly into \textbf{Parquet} format to ensure columnar compression and high-throughput query performance. Static station layout metadata is queried once, as geographic coordinates and physical dock capacities remain stable.
 
 Historical meteorological measurements are extracted retroactively via the \textbf{Open-Meteo} Historical Weather API for Paris coordinates (48.8566$^\circ$N, 2.3522$^\circ$E). Because Open-Meteo archives granular surface-level observations, a single deterministic extract suffices and is joined onto the V\'elib' status records by timestamp alignment.
-
-The resulting dataset comprises three distinct components:
-\begin{itemize}
-    \item \textbf{Status Time Series:} $\approx 1{,}510\text{ stations} \times 4\text{ reads/hr} \times 24\text{ hrs} \times 30\text{ days} \approx \mathbf{4.35\text{ million rows}}$.
-    \item \textbf{Station Metadata Table:} $1{,}510\text{ unique station rows}$ detailing physical capacity and coordinates.
-    \item \textbf{Weather Matrix:} $720\text{ hourly intervals}$ ($30\text{ days} \times 24\text{ h}$) joined across stations, accompanied by 30 day-level environmental aggregates.
-\end{itemize}
-
 \section{3. Data Dictionary}
 
 \subsection*{3.1 V\'elib' GBFS Feeds}
@@ -58,7 +50,7 @@ The resulting dataset comprises three distinct components:
 \toprule
 \textbf{Variable} & \textbf{Data Type} & \textbf{Description / Operational Purpose} \\
 \midrule
-\multicolumn{3}{l}{\textit{\textbf{Feed A: Real-Time Status (\texttt{station\_status.json}) -- Polled Every 15 Minutes}}} \\
+\multicolumn{3}{l}{\textit{\textbf{Feed A: Real-Time Status (\texttt{station\_status.json}) -- Polled Every 5 Minutes}}} \\
 \texttt{station\_id} & Integer / String & Unique station identifier matching the metadata registry. \\
 \texttt{is\_installed} & Binary (0/1) & 1 if the physical station is deployed on street, 0 otherwise. \\
 \texttt{is\_renting} & Binary (0/1) & 1 if active rentals are permitted, 0 if disabled/offline. \\
@@ -78,6 +70,8 @@ The resulting dataset comprises three distinct components:
 \bottomrule
 \end{tabularx}
 \end{table}
+
+\newpage
 
 \subsection*{3.2 Open-Meteo Weather Observations (Paris Station)}
 
