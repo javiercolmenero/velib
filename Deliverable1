@@ -1,0 +1,133 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+\hypersetup{hidelinks}
+\setlist{nosep, leftmargin=1.4em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+
+\titleformat{\section}{\large\bfseries}{}{0em}{}[\hrule]
+\titlespacing*{\section}{0pt}{8pt}{4pt}
+
+\begin{document}
+
+{\LARGE\textbf{DALAS Project: V\'elib' Criticality Predictor}}\\[2pt]
+{\large\textbf{Deliverable 1: Project Scope, Data Pipeline \& Initial Dataset Profile}}\\[3pt]
+{\small\textbf{Filippo Vitozzi}, \textbf{Ginevra Gurioli} \& \textbf{Javier Colmenero}}
+
+\vspace{0.15cm}
+\noindent\fbox{\parbox{0.97\textwidth}{\small\textbf{The core problem.} Anyone who uses V\'elib' in Paris knows the frustration of reaching a station that is empty when you need a bike, or full when you need to return one. We forecast whether a station will become \textit{critical} (nearly empty or nearly full) within the next \textbf{15 minutes}, and test whether knowing what surrounds the station (universities, business districts, tourist landmarks) makes that forecast noticeably more accurate.}}
+
+\section{1. Research Questions}
+
+We break the project into three core research questions that build sequentially upon one another:
+\begin{itemize}[itemsep=2pt, topsep=2pt]
+    \item \textbf{Q1 (Urban Context):} How does station behavior and turnover change with geographic and functional location? Do stations near universities, office districts, tourist landmarks, or steep topography (e.g., Montmartre) exhibit distinct daily occupancy profiles?
+    \item \textbf{Q2 (Temporal and Meteorological Factors):} How do diurnal commuting patterns, rush hours, weekdays versus weekends, precipitation, temperature variations, and wind conditions alter bike borrowing and return rates?
+    \item \textbf{Q3 (Criticality Prediction):} Can machine learning reliably predict station criticality 15 minutes ahead, and does augmenting the feature space with spatial/urban context scores provide a measurable lift over purely autoregressive and meteorological signals?
+\end{itemize}
+
+\section{2. Data Sources and Collection}
+
+The V\'elib' system updates dynamically and offers no historical dock status archive, necessitating a continuous ingestion pipeline. A scheduled cron job running on \textbf{Railway} queries the official V\'elib' GBFS status API every 15 minutes across a 30-day continuous collection window. Snapshots are partitioned and serialized directly into \textbf{Parquet} format to ensure columnar compression and high-throughput query performance. Static station layout metadata is queried once, as geographic coordinates and physical dock capacities remain stable.
+
+Historical meteorological measurements are extracted retroactively via the \textbf{Open-Meteo} Historical Weather API for Paris coordinates (48.8566$^\circ$N, 2.3522$^\circ$E). Because Open-Meteo archives granular surface-level observations, a single deterministic extract suffices and is joined onto the V\'elib' status records by timestamp alignment.
+
+The resulting dataset comprises three distinct components:
+\begin{itemize}
+    \item \textbf{Status Time Series:} $\approx 1{,}510\text{ stations} \times 4\text{ reads/hr} \times 24\text{ hrs} \times 30\text{ days} \approx \mathbf{4.35\text{ million rows}}$.
+    \item \textbf{Station Metadata Table:} $1{,}510\text{ unique station rows}$ detailing physical capacity and coordinates.
+    \item \textbf{Weather Matrix:} $720\text{ hourly intervals}$ ($30\text{ days} \times 24\text{ h}$) joined across stations, accompanied by 30 day-level environmental aggregates.
+\end{itemize}
+
+\section{3. Data Dictionary}
+
+\subsection*{3.1 V\'elib' GBFS Feeds}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Variable} & \textbf{Data Type} & \textbf{Description / Operational Purpose} \\
+\midrule
+\multicolumn{3}{l}{\textit{\textbf{Feed A: Real-Time Status (\texttt{station\_status.json}) -- Polled Every 15 Minutes}}} \\
+\texttt{station\_id} & Integer / String & Unique station identifier matching the metadata registry. \\
+\texttt{is\_installed} & Binary (0/1) & 1 if the physical station is deployed on street, 0 otherwise. \\
+\texttt{is\_renting} & Binary (0/1) & 1 if active rentals are permitted, 0 if disabled/offline. \\
+\texttt{is\_returning} & Binary (0/1) & 1 if incoming dock returns are accepted, 0 otherwise. \\
+\texttt{last\_reported} & Integer (Unix s) & Hardware broadcast timestamp of latest terminal check-in. \\
+\texttt{num\_bikes\_available} & Integer & Total operational bikes currently docked and rentable. \\
+\texttt{num\_docks\_available} & Integer & Total empty/functional locking docks ready for return. \\
+\texttt{mechanical} & Integer & Sub-count of mechanical (green) V\'elib' bikes ready. \\
+\texttt{ebike} & Integer & Sub-count of electric assisted (blue) V\'elib' bikes ready. \\
+\midrule
+\multicolumn{3}{l}{\textit{\textbf{Feed B: Static Metadata (\texttt{station\_information.json}) -- Single Ingestion}}} \\
+\texttt{station\_id} & Integer / String & Primary key linking to real-time status feeds. \\
+\texttt{name} & String & Public designation of station (e.g., \textit{Gare de Lyon -- Chalon}). \\
+\texttt{lat}, \texttt{lon} & Float (WGS84) & Coordinate pair used for spatial joins and POI distance calculations. \\
+\texttt{capacity} & Integer & Total built-in docking posts, used to derive capacity utilization. \\
+\texttt{stationCode} & String & Alphanumeric terminal identifier visible on street hardware. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection*{3.2 Open-Meteo Weather Observations (Paris Station)}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabularx}{\textwidth}{l l X}
+\toprule
+\textbf{Variable} & \textbf{Unit / Type} & \textbf{Feature Description \& Physical Interpretation} \\
+\midrule
+\multicolumn{3}{l}{\textit{\textbf{Hourly Weather Feed (Matched to Closest 15-Minute Station Snapshot)}}} \\
+\texttt{temperature\_2m} & $^\circ$C (Float) & Air temperature measured at standard 2-meter surface level. \\
+\texttt{relative\_humidity\_2m} & \% (Float) & Relative atmospheric humidity at 2 meters. \\
+\texttt{apparent\_temperature} & $^\circ$C (Float) & Perceived thermal comfort index (wind chill and heat index). \\
+\texttt{rain} & mm (Float) & Liquid rain accumulation over the preceding 1-hour interval. \\
+\texttt{snowfall} & cm (Float) & Fresh frozen snowfall accumulation over the interval. \\
+\texttt{snow\_depth} & m (Float) & Ground surface snow cover depth. \\
+\texttt{weather\_code} & WMO Code (Int) & Standard WMO categorical weather condition (clear, rain, fog). \\
+\texttt{cloud\_cover} & \% (Float) & Total cloud cover fraction across sky. \\
+\texttt{wind\_speed\_10m} & km/h (Float) & Sustained horizontal wind speed measured at 10 meters. \\
+\texttt{wind\_gusts\_10m} & km/h (Float) & Peak transient wind gust registered at 10 meters over the hour. \\
+\midrule
+\multicolumn{3}{l}{\textit{\textbf{Daily Summary Feed (Day-Level Macro Environmental Controls)}}} \\
+\texttt{weather\_code} & WMO Code (Int) & Dominant overall weather classification code for the date. \\
+\texttt{temperature\_2m\_mean/max/min} & $^\circ$C (Float) & Mean, diurnal peak, and overnight minimum 2m temperatures. \\
+\texttt{apparent\_temperature\_mean/max/min} & $^\circ$C (Float) & Daily mean, maximum, and minimum perceived temperatures. \\
+\texttt{daylight\_duration} & Seconds (Float) & Total elapsed astronomical daylight duration. \\
+\texttt{sunshine\_duration} & Seconds (Float) & Total seconds of direct active solar irradiance. \\
+\texttt{sunrise}, \texttt{sunset} & ISO/Unix (Time) & Precise astronomical sunrise and sunset events (UTC). \\
+\texttt{precipitation\_hours} & Hours (Float) & Total hours of measurable liquid or solid precipitation. \\
+\texttt{precipitation\_sum} & mm (Float) & Total 24-hour aggregate precipitation volume. \\
+\texttt{wind\_speed\_10m\_max} & km/h (Float) & Peak 24-hour sustained wind velocity at 10 meters. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{4. Cleaning and Preprocessing}
+
+We prepare the raw stream in four sequential stages:
+\begin{enumerate}
+    \item \textbf{Schema Normalization:} GBFS payloads occasionally duplicate keys across camelCase and snake\_case representations (e.g., \texttt{numDocksAvailable} vs. \texttt{num\_docks\_available}). We cast all attributes to standardized snake\_case and extract nested bike breakdown objects.
+    \item \textbf{Operational Filtering:} We drop records where $\texttt{is\_installed} = 0$, or where both $\texttt{is\_renting} = 0$ and $\texttt{is\_returning} = 0$, ensuring technical outages are not misclassified as depleted or saturated stations.
+    \item \textbf{Temporal Resampling and Weather Merging:} Station snapshots are rounded to uniform 15-minute intervals and enriched with corresponding hourly meteorological features.
+    \item \textbf{Spatial Context Scoring:} Using station coordinates (\texttt{lat}, \texttt{lon}), we calculate geodesic proximity buffers to OpenStreetMap amenities, generating three contextual metrics: \texttt{university\_score}, \texttt{business\_score}, and \texttt{tourism\_score}.
+\end{enumerate}
+
+\section{5. Next Steps: Exploration and the Prediction Test}
+
+Before modeling we will explore the data visually with an interactive Folium map of station capacities and activity zones, average availability curves for weekdays versus weekends, and heatmaps of saturation by neighborhood across the week.
+
+We define a station as \textbf{critical} if it has at most one bike available or at most one free dock. We then compare two supervised classification models that predict criticality 15 minutes ahead. \textbf{Model A (baseline)} uses current bike and dock counts, first-order differences ($\Delta_{t-15}$), cyclic hour/day features, and weather variables. \textbf{Model B (context-aware)} augments Model A with the three spatial density scores. Evaluating precision, recall, and AUROC across both models will determine whether surrounding urban geography provides distinct predictive signal beyond short-term station momentum.
+
+\end{document}
