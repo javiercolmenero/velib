@@ -1,5 +1,6 @@
 import base64
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -77,7 +78,9 @@ while utc_day <= last_utc:
             dest_dir.mkdir(parents=True, exist_ok=True)
             # Filename is now PARIS local time, with the offset (+0200 / +0100) to stay unambiguous.
             name = f"station_status_{paris.strftime('%Y%m%dT%H%M%S%z')}.parquet"
-            (dest_dir / name).write_bytes(tar.extractfile(member).read())
+            dest_file = dest_dir / name
+            dest_file.write_bytes(tar.extractfile(member).read())
+            os.utime(dest_file, (member.mtime, member.mtime))   # restore the original extraction time
             per_day[paris.date()] = per_day.get(paris.date(), 0) + 1
             saved += 1
     print(f"{saved} files kept")
