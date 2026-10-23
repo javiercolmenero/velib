@@ -1,34 +1,88 @@
 import base64
 import io
+import re
+import shutil
 import subprocess
 import tarfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-START_DATE = date(2026, 10, 1)    # <<< FIRST day to download (inclusive)
-END_DATE = date(2026, 10, 14)     # <<< LAST day to download (inclusive) = first two weeks
+PARIS = ZoneInfo("Europe/Paris")
 
-days = [START_DATE + timedelta(d) for d in range((END_DATE - START_DATE).days + 1)]
-paths = " ".join(f"station_status/date={d.isoformat()}" for d in days)
-remote = (
-    f"echo ==BEGIN==; cd /data && tar czf - {paths} | base64 -w0; echo; echo ==END=="
-)
+START_DATE = date(2026, 10, 1)    # <<< FIRST Paris day to keep (inclusive)
+END_DATE = date(2026, 10, 14)     # <<< LAST Paris day to keep (inclusive) = first two weeks
 
-print("Downloading, this can take a few minutes...")    
-out = subprocess.run(
-    [
+OUT_DIR = Path("station_status")  # the ONLY folder this creates: station_status/date=<PARIS date>/...
+
+PROJECT = "5393dde5-0995-4cdd-87dd-affd4544ee68"
+ENVIRONMENT = "cdaea9f4-b468-428d-b7b3-c07b4e434d7f"
+SERVICE = "9ae1a54c-d16c-4d45-a620-e4e62210ece2"
+
+# Clean slate: remove the output folder and the old folders from earlier versions.
+for old in (OUT_DIR, Path("_raw_utc"), Path("station_status_paris")):
+    shutil.rmtree(old, ignore_errors=True)
+
+
+def fetch_utc_day(day: date) -> bytes | None:
+    """Download one UTC day folder as tar.gz bytes (None if that day has no data)."""
+    remote = (
+        f"echo ==BEGIN==; cd /data && tar czf - station_status/date={day.isoformat()} "
+        f"2>/dev/null | base64 -w0; echo; echo ==END=="
+    )
+    cmd = [
         "railway.cmd", "ssh",
-        "--project", "5393dde5-0995-4cdd-87dd-affd4544ee68",
-        "--environment", "cdaea9f4-b468-428d-b7b3-c07b4e434d7f",
-        "--service", "9ae1a54c-d16c-4d45-a620-e4e62210ece2",
+        "--project", PROJECT, "--environment", ENVIRONMENT, "--service", SERVICE,
         "--", remote,
-    ],
-    capture_output=True, text=True,
-)
-text = out.stdout
-if "==BEGIN==" not in text or "==END==" not in text:
-    raise SystemExit(f"Unexpected output:\n{text[:500]}\n{out.stderr[:500]}")
+    ]
+    for attempt in range(3):
+        out = subprocess.run(cmd, capture_output=True   , text=True)
+        text = out.stdout
+        if "==BEGIN==" in text and "==END==" in text:
+            b64 = "".join(text.split("==BEGIN==")[1].split("==END==")[0].split())
+            return base64.b64decode(b64) if b64 else None
+        print(f"  attempt {attempt + 1} failed, retrying... {out.stderr[:200]}")
+    raise SystemExit(f"Could not download {day}. Last output:\n{text[:500]}")
 
-b64 = "".join(text.split("==BEGIN==")[1].split("==END==")[0].split())
-with tarfile.open(fileobj=io.BytesIO(base64.b64decode(b64)), mode="r:gz") as tar:
-    tar.extractall(".")
-print("Done: see the station_status folder")
+
+# A Paris day spans two UTC folders, so fetch one UTC day before and after the range.
+first_utc = START_DATE - timedelta(days=1)
+last_utc = END_DATE + timedelta(days=1)
+
+pattern = re.compile(r"station_status_(\d{8}T\d{6})Z\.parquet")
+per_day: dict[date, int] = {}
+
+utc_day = first_utc
+while utc_day <= last_utc:
+    print(f"UTC day {utc_day} ...", end=" ", flush=True)
+    data = fetch_utc_day(utc_day)
+    if data is None:
+        print("no data")
+        utc_day += timedelta(days=1)
+        continue
+
+    saved = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            m = pattern.fullmatch(Path(member.name).name)
+            if not m:
+                continue
+            utc = datetime.strptime(m.group(1), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+            paris = utc.astimezone(PARIS)
+            if not (START_DATE <= paris.date() <= END_DATE):
+                continue
+            dest_dir = OUT_DIR / f"date={paris.date().isoformat()}"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            # Filename is now PARIS local time, with the offset (+0200 / +0100) to stay unambiguous.
+            name = f"station_status_{paris.strftime('%Y%m%dT%H%M%S%z')}.parquet"
+            (dest_dir / name).write_bytes(tar.extractfile(member).read())
+            per_day[paris.date()] = per_day.get(paris.date(), 0) + 1
+            saved += 1
+    print(f"{saved} files kept")
+    utc_day += timedelta(days=1)
+
+for d in sorted(per_day):
+    print(f"  {d}: {per_day[d]}")
+print(f"\nDone: {sum(per_day.values())} files in {OUT_DIR}/")
