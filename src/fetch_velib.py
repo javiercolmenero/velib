@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 PARIS = ZoneInfo("Europe/Paris")
 
 START_DATE = date(2026, 10, 1)    # <<< FIRST Paris day to keep (inclusive)
-END_DATE = date(2026, 10, 14)     # <<< LAST Paris day to keep (inclusive) = first two weeks
+END_DATE = date(2026, 10, 31)     # <<< LAST Paris day to keep (inclusive) = first two weeks
 
 OUT_DIR = Path("station_status")  # the ONLY folder this creates: station_status/date=<PARIS date>/...
 
