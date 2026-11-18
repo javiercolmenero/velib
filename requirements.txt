@@ -1,2 +1,6 @@
 pyarrow>=16
+openmeteo-requests
+requests-cache
+retry-requests
+pandas
 

@@ -1,24 +1,37 @@
+from pathlib import Path
 import openmeteo_requests
-
 import pandas as pd
 import requests_cache
 from retry_requests import retry
 
+# Resolve project directories
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = PROJECT_ROOT / "data" / "processed"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 # Setup the Open-Meteo API client with cache and retry on error
-cache_session = requests_cache.CachedSession('.cache', expire_after = -1)
+cache_session = requests_cache.CachedSession(str(PROJECT_ROOT / ".cache"), expire_after = -1)
 retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
 openmeteo = openmeteo_requests.Client(session = retry_session)
 
-# Make sure all required weather variables are listed here
-# The order of variables in hourly or daily is important to assign them correctly below
-url = "https://my-server.tld/v1/archive"
+# Open-Meteo Historical Weather API endpoint
+url = "https://archive-api.open-meteo.com/v1/archive"
 params = {
-	"latitude": 52.52,
-	"longitude": 13.41,
-	"start_date": "2026-09-15",
-	"end_date": "2026-09-29",
-	"daily": ["weather_code", "temperature_2m_mean", "temperature_2m_max", "temperature_2m_min", "daylight_duration", "apparent_temperature_mean", "apparent_temperature_max", "apparent_temperature_min", "sunshine_duration", "sunrise", "sunset", "precipitation_hours", "precipitation_sum", "wind_speed_10m_max"],
-	"hourly": ["temperature_2m", "relative_humidity_2m", "apparent_temperature", "rain", "snowfall", "snow_depth", "weather_code", "cloud_cover", "wind_gusts_10m", "wind_speed_10m"],
+	"latitude": 48.8566,
+	"longitude": 2.3522,
+	"start_date": "2026-10-01",
+	"end_date": "2026-10-31",
+	"timezone": "Europe/Paris",
+	"daily": [
+		"weather_code", "temperature_2m_mean", "temperature_2m_max", "temperature_2m_min",
+		"daylight_duration", "apparent_temperature_mean", "apparent_temperature_max",
+		"apparent_temperature_min", "sunshine_duration", "sunrise", "sunset",
+		"precipitation_hours", "precipitation_sum", "wind_speed_10m_max"
+	],
+	"hourly": [
+		"temperature_2m", "relative_humidity_2m", "apparent_temperature", "rain",
+		"snowfall", "snow_depth", "weather_code", "cloud_cover", "wind_gusts_10m", "wind_speed_10m"
+	],
 }
 responses = openmeteo.weather_api(url, params = params)
 
@@ -107,3 +120,12 @@ daily_data["wind_speed_10m_max"] = daily_wind_speed_10m_max
 
 daily_dataframe = pd.DataFrame(data = daily_data)
 print("\nDaily data\n", daily_dataframe)
+
+# Save processed tables (Parquet as defined in WORKFLOW.md, plus CSV for inspection)
+hourly_parquet_path = OUTPUT_DIR / "weather_hourly.parquet"
+hourly_dataframe.to_parquet(hourly_parquet_path, index=False)
+print(f"\n[Saved] Hourly weather saved to {hourly_parquet_path} ({len(hourly_dataframe)} rows)")
+
+daily_parquet_path = OUTPUT_DIR / "weather_daily.parquet"
+daily_dataframe.to_parquet(daily_parquet_path, index=False)
+print(f"[Saved] Daily weather saved to {daily_parquet_path} ({len(daily_dataframe)} rows)")
