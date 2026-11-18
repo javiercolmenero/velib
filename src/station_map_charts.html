@@ -1,0 +1,272 @@
+{% macro header(this, kwargs) %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --velib-panels: 230px; }
+  .folium-map { height: calc(100% - var(--velib-panels)) !important; }
+  .velib-analysis {
+    position: fixed; inset: auto 0 0; z-index: 1000; height: var(--velib-panels);
+    box-sizing: border-box; display: grid; grid-template-columns: minmax(230px, 24%) minmax(0, 1fr);
+    background: #fff; color: #17273a; border-top: 1px solid #cad3dd;
+    box-shadow: 0 -2px 10px #20304016; font: 13px/1.4 system-ui, sans-serif;
+  }
+  .velib-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 9px 14px; }
+  .velib-panel + .velib-panel { border-left: 1px solid #e2e8f0; }
+  .velib-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 16px; }
+  .velib-heading h2 { font: 650 15px/1.25 system-ui, sans-serif; margin: 0; }
+  .velib-controls { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .velib-controls label { display: flex; align-items: center; gap: 5px; margin: 0; }
+  .velib-controls select { color: inherit; background: #fff; border: 1px solid #aebdcc; border-radius: 4px; }
+  #velib-play { min-width: 56px; border: 0; border-radius: 4px; background: #254887; color: #fff; }
+  .velib-plot { position: relative; flex: 1; min-height: 0; }
+  #velib-occupancy { cursor: pointer; }
+  .velib-states { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: center; font-size: 12px; }
+  .velib-swatch::before {
+    content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 4px;
+    background: var(--state-color); border-radius: 50%; box-sizing: border-box;
+  }
+  .velib-free::before { border: 1.5px solid #141414; }
+  .velib-scale { display: inline-flex; align-items: center; gap: 5px; }
+  .velib-gradient {
+    width: clamp(40px, 15vw, 165px); height: 9px; border-radius: 5px;
+    background: linear-gradient(90deg, {{ this.gradient_stops }});
+  }
+  #velib-selection { color: #45576a; }
+  @media (max-width: 680px) {
+    :root { --velib-panels: min(345px, 54dvh); }
+    .velib-analysis { grid-template-columns: 1fr; grid-template-rows: 34% 1fr; }
+    .velib-panel { padding: 5px 8px; }
+    .velib-panel + .velib-panel { border-left: 0; border-top: 1px solid #e2e8f0; }
+    .velib-heading { gap: 4px 8px; }
+    .velib-heading h2 { font-size: 13px; }
+    .velib-controls, .velib-states { font-size: 11px; }
+    .velib-legend { max-width: 245px; padding: 7px 9px !important; font-size: 11px !important; }
+    .velib-legend strong { font-size: 13px !important; }
+  }
+</style>
+{% endmacro %}
+
+{% macro html(this, kwargs) %}
+<section class="velib-analysis" aria-label="Station charts">
+  <div class="velib-panel">
+    <div class="velib-heading"><h2>Stations by arrondissement</h2></div>
+    <div class="velib-plot">
+      <canvas id="velib-arrondissements" role="img" aria-label="Station counts by arrondissement and outside Paris"></canvas>
+    </div>
+  </div>
+  <div class="velib-panel">
+    <div class="velib-heading">
+      <h2>15-minute dock occupancy</h2>
+      <div class="velib-controls">
+        <label>Date <select id="velib-date"></select></label>
+        <label>Time <select id="velib-time"></select></label>
+        <button id="velib-play" type="button">Play</button>
+        <label>Speed <select id="velib-speed" aria-label="Playback speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select></label>
+      </div>
+    </div>
+    <div class="velib-plot">
+      <canvas id="velib-occupancy" role="img" aria-label="Dock occupancy every 15 minutes in Paris local time. Click a time to recolor stations."></canvas>
+    </div>
+    <div class="velib-states">
+      <div class="velib-scale" aria-label="Dock occupancy color scale">
+        <span class="velib-swatch velib-free" style="--state-color:{{ this.palette[0] }}">0% · All docks free</span>
+        <span class="velib-gradient" aria-hidden="true"></span>
+        <span>100% · Full</span>
+      </div>
+      <span class="velib-swatch" style="--state-color:{{ this.no_reading_color }}">No reading</span>
+      <output id="velib-selection" aria-live="polite"></output>
+    </div>
+  </div>
+</section>
+{% endmacro %}
+
+{% macro script(this, kwargs) %}
+(() => {
+  const districts = {{ this.districts | tojson }};
+  const snapshots = {{ this.intervals_by_day | tojson }};
+  const stationLayer = {{ this.layer_name }};
+  const map = {{ this.map_name }};
+  const dayControl = document.getElementById('velib-date');
+  const timeControl = document.getElementById('velib-time');
+  const playControl = document.getElementById('velib-play');
+  const speedControl = document.getElementById('velib-speed');
+  const selection = document.getElementById('velib-selection');
+  const canvas = document.getElementById('velib-occupancy');
+  const palette = {{ this.palette | tojson }};
+  const noReadingColor = {{ this.no_reading_color | tojson }};
+  const unknownOccupancy = {{ this.unknown_occupancy }};
+  const dates = Object.keys(snapshots);
+  const baseColor = stationLayer.getLayers()[0].options.color;
+  let intervals = [];
+  let firstRecorded;
+  let lastRecorded;
+  let playback = null;
+
+  if (typeof Chart === 'undefined') {
+    selection.textContent = 'Charts could not load.';
+    return;
+  }
+
+  const stationCount = districts.reduce((total, district) => total + district.count, 0);
+  const pie = document.getElementById('velib-arrondissements');
+  pie.setAttribute('aria-label', districts.map(({label, count}) => `${label} ${count}`).join(', '));
+  new Chart(pie, {
+    type: 'pie',
+    data: {
+      labels: districts.map(({label}) => label),
+      datasets: [{
+        data: districts.map(({count}) => count),
+        backgroundColor: districts.map(({color}) => color),
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {legend: {display: false}, tooltip: {callbacks: {
+        label: ({label, raw}) => `${label} · ${raw} stations (${(100 * raw / stationCount).toFixed(1)}%)`,
+      }}},
+    },
+  });
+
+  const rates = Object.values(snapshots).flatMap(day => day.map(({occupancy}) => occupancy)).filter(Number.isFinite);
+  const yMin = rates.length ? Math.max(0, Math.floor((Math.min(...rates) - 2) / 5) * 5) : 0;
+  const yMax = rates.length ? Math.min(100, Math.ceil((Math.max(...rates) + 2) / 5) * 5) : 100;
+  const chart = new Chart(canvas, {
+    type: 'line',
+    data: {datasets: [{
+      data: [],
+      borderColor: baseColor,
+      borderWidth: 2,
+      pointBackgroundColor: baseColor,
+      pointRadius: ({dataIndex}) => timeControl.value === String(dataIndex) ? 5 : 2,
+    }]},
+    options: {
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: {mode: 'index', intersect: false},
+      scales: {
+        x: {type: 'category', title: {display: true, text: 'Time (Paris)'}, ticks: {maxRotation: 0, maxTicksLimit: 12}},
+        y: {min: yMin, max: yMax, title: {display: true, text: 'Occupancy (%)'}, ticks: {maxTicksLimit: 5}},
+      },
+      plugins: {legend: {display: false}, tooltip: {callbacks: {
+        label: ({dataIndex, parsed}) => `${parsed.y.toFixed(1)}% occupied · ${intervals[dataIndex].captured}`,
+      }}},
+    },
+  });
+
+  function applyTime() {
+    const interval = intervals[timeControl.value];
+    const readings = interval?.states ? atob(interval.states) : null;
+    const counts = new Uint16Array(256);
+    stationLayer.eachLayer(marker => {
+      const properties = marker.feature.properties;
+      const percent = readings?.charCodeAt(properties.index) ?? unknownOccupancy;
+      const completelyFree = percent === 0;
+      const hasReading = percent !== unknownOccupancy;
+      const fillColor = interval ? (palette[percent] ?? noReadingColor) : baseColor;
+      const weight = completelyFree ? 2 : 0.7;
+      const status = hasReading ? `${percent}% occupied` : 'No reading';
+      properties.time_status = interval ? `${status} · ${interval.captured ?? interval.label}` : 'Select a time';
+      counts[percent] += 1;
+      if (marker.options.fillColor !== fillColor || marker.options.weight !== weight) {
+        marker.setStyle({
+          color: completelyFree ? '#141414' : fillColor,
+          weight,
+          fillColor,
+          fillOpacity: hasReading ? 0.9 : 0.6,
+        });
+      }
+      if (completelyFree) marker.bringToFront();
+    });
+    if (readings) {
+      selection.textContent = `${interval.captured} · ${counts[0]} with all docks free · ${counts[100]} full · ${counts[unknownOccupancy]} no reading`;
+    } else {
+      selection.textContent = interval ? `No snapshot for ${interval.label}.` : 'Choose a time or press Play.';
+    }
+    map.closePopup();
+    chart.update();
+  }
+
+  function selectTime(index) {
+    timeControl.value = String(index);
+    applyTime();
+  }
+
+  function stopPlayback() {
+    clearInterval(playback);
+    playback = null;
+    playControl.textContent = 'Play';
+    selection.setAttribute('aria-live', 'polite');
+  }
+
+  function schedulePlayback() {
+    clearInterval(playback);
+    playControl.textContent = 'Pause';
+    selection.setAttribute('aria-live', 'off');
+    playback = setInterval(() => {
+      const next = Number(timeControl.value) + 1;
+      if (next <= lastRecorded) {
+        selectTime(next);
+      } else if (dayControl.selectedIndex < dates.length - 1) {
+        dayControl.selectedIndex += 1;
+        loadDay();
+        selectTime(firstRecorded);
+      }
+      if (dayControl.selectedIndex === dates.length - 1 && Number(timeControl.value) >= lastRecorded) stopPlayback();
+    }, 1000 / Number(speedControl.value));
+  }
+
+  function loadDay() {
+    intervals = snapshots[dayControl.value];
+    firstRecorded = intervals.findIndex(({states}) => states);
+    lastRecorded = intervals.findLastIndex(({states}) => states);
+    timeControl.replaceChildren(new Option('Capacity view', ''));
+    intervals.forEach(({label}, index) => timeControl.add(new Option(label, index)));
+    chart.data.labels = intervals.map(({label}) => label);
+    chart.data.datasets[0].data = intervals.map(({occupancy}) => occupancy);
+  }
+
+  dayControl.addEventListener('change', () => {
+    stopPlayback();
+    loadDay();
+    applyTime();
+  });
+  timeControl.addEventListener('change', () => {
+    stopPlayback();
+    applyTime();
+  });
+  playControl.addEventListener('click', () => {
+    if (playback !== null) {
+      stopPlayback();
+      return;
+    }
+    const current = Number(timeControl.value);
+    const finalDate = dayControl.selectedIndex === dates.length - 1;
+    if (timeControl.value === '' || current < firstRecorded || (finalDate && current >= lastRecorded)) {
+      selectTime(firstRecorded);
+    }
+    if (!finalDate || firstRecorded < lastRecorded) schedulePlayback();
+  });
+  speedControl.addEventListener('change', () => {
+    if (playback !== null) schedulePlayback();
+  });
+  canvas.addEventListener('click', event => {
+    const {x, y} = Chart.helpers.getRelativePosition(event, chart);
+    const {left, right, top} = chart.chartArea;
+    if (x < left || x > right || y < top) return;
+    const index = chart.scales.x.getValueForPixel(x);
+    stopPlayback();
+    selectTime(index);
+  });
+
+  dates.forEach(day => dayControl.add(new Option(day, day)));
+  dayControl.value = dates.slice().reverse().find(day => snapshots[day].every(({states}) => states)) ?? dates.at(-1);
+  loadDay();
+  applyTime();
+})();
+{% endmacro %}

@@ -122,3 +122,20 @@ Fixed spatial characteristics computed once per station using buffer radii (e.g.
 | **Topography (Elevation)**| **Static** | Open-Elevation API | Once | `data/static/elevations.parquet` |
 | **Historical Weather** | **Retroactive Batch** | Open-Meteo Archive API | At EDA/modeling | Joined on hourly timestamp |
 | **Calendar & Holidays** | **Retroactive Batch** | `python-holidays` | At EDA/modeling | Joined on date/hour |
+
+## Exploratory station map
+
+Run these commands from the repository root.
+
+```sh
+python -m pip install -r requirements.txt "folium>=0.20" "shapely>=2" tzdata
+python -m src.station_map
+```
+
+Open `reports/station_map.html` in a browser with internet access for the [Plan IGN basemap](https://cartes.gouv.fr/) and map libraries. The map uses the snapshots under `src/station_status` by default. Pass `--status-dir` if the snapshots are stored elsewhere. It reads `data/static/station_information.json` and `data/static/activity_pois.json` when available and requests the public Vélib' and OpenStreetMap feeds for any missing reference files.
+
+Circle size represents the dock capacity reported by the station registry. Click a station for its critical share across valid observations where the station was installed and allowed rentals or returns. Use the layers control to view university and college, office and commercial, or tourism and landmark density. The heat layers show mapped OpenStreetMap features and use the bounding-box centers of ways and relations.
+
+The pie chart counts mapped stations inside each of the 20 official Paris arrondissement boundaries, with a separate slice for stations outside Paris. The boundaries come from [Paris Data](https://opendata.paris.fr/explore/dataset/arrondissements/) and can be cached as `data/static/arrondissements.geojson`.
+
+Choose a date and click the 15-minute chart or use the time menu. Press Play to replay the snapshots, with one interval per second at 1× speed. Playback advances to the next recorded date automatically and stops at the final snapshot. Each interval uses its first recorded snapshot in Paris local time. Occupancy is available bikes divided by available bikes plus free docks. The chart uses those totals across mapped stations with valid operational readings. Stations with all docks free are green with a black outline. The gradient uses green, lime, yellow, orange, and red at 0%, 25%, 50%, 75%, and 100% occupancy, respectively. Stations without usable readings are gray. Intervals without a snapshot appear as gaps.
